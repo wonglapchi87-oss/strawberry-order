@@ -37,6 +37,10 @@
   table.list{font-size:.88rem}
   table.list td.n{white-space:normal}
   table.list td,table.list th{padding:8px 4px}
+  .condrow td{background:#fff7d6}
+  .cond{margin-top:10px;padding:10px;border:1px dashed #e0b400;border-radius:10px;background:#fffbea;font-size:.9rem}
+  .cond td.n{white-space:normal}
+  .costt td.n{white-space:normal;min-width:90px}
 </style>
 </head>
 <body>
@@ -84,18 +88,24 @@ const COMBOS = [
   {key:"Medium 500g",  grade:"Medium", kg:0.5,  zh:"中/普通 500g"},
   {key:"Medium 1 Box", grade:"Medium", kg:null, zh:"中/普通 1 箱 (whole box/tray)"},
 ];
+const COND = {key:"Box or fallback", grade:"Large", kg:null, cond:true,
+  label:"If a box is available: 1 Box; otherwise: 1kg Large + 500g Medium",
+  zh:"有箱就要 1 箱；冇箱就要 1kg 大 + 500g 中/普通",
+  short:"Box if available, else 1kg Large + 500g Medium"};
+const ALL = [...COMBOS, COND];
+const nameOf = c => c.cond ? c.label : c.key.replace("Medium","Medium / Normal");
 let EDITING = null;
 const LABEL = {"Large":"Large","Medium":"Medium / Normal"};
 let CFG = null, ORDERS = [], lastLoad = 0;
-const qty = Object.fromEntries(COMBOS.map(c=>[c.key,0]));
+const qty = Object.fromEntries(ALL.map(c=>[c.key,0]));
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const fmtKg = kg => (Math.round(kg*100)/100) + "kg";
 const norm = s => s.trim().replace(/\s+/g," ").toLowerCase();
 
 function renderQty(){
-  $("qtyTable").querySelector("tbody").innerHTML = COMBOS.map(c=>`
-    <tr><td><b>${c.key.replace("Medium","Medium / Normal")}</b><div class="mute">${c.zh}</div></td>
+  $("qtyTable").querySelector("tbody").innerHTML = ALL.map(c=>`
+    <tr${c.cond?' class="condrow"':''}><td><b>${nameOf(c)}</b><div class="mute">${c.zh}</div></td>
     <td class="n"><div class="qty"><button type="button" data-k="${c.key}" data-d="-1" aria-label="minus">−</button>
     <span>${qty[c.key]}</span><button type="button" data-k="${c.key}" data-d="1" aria-label="plus">+</button></div></td></tr>`).join("");
 }
@@ -110,47 +120,70 @@ function price(k){ const p = CFG?.prices?.[k]; return typeof p === "number" ? p 
 function money(v){ return (CFG?.currency || "$") + v.toFixed(2); }
 
 function orderSummary(o){
-  const parts = COMBOS.filter(c=>o.items?.[c.key]>0).map(c=>`${c.key.replace("Medium","Medium/Normal")} × ${o.items[c.key]}`);
+  const parts = ALL.filter(c=>o.items?.[c.key]>0).map(c=>`${c.cond ? c.short : c.key.replace("Medium","Medium/Normal")} × ${o.items[c.key]}`);
+  const cq = o.items?.[COND.key]||0;
   const kgBy = {}, boxBy = {};
   COMBOS.forEach(c=>{ const q=o.items?.[c.key]||0; if(!q) return;
     if (c.kg==null) boxBy[c.grade]=(boxBy[c.grade]||0)+q; else kgBy[c.grade]=(kgBy[c.grade]||0)+q*c.kg; });
   const kgText = ["Large","Medium"].map(g=>{ const bits=[]; if(kgBy[g]) bits.push(fmtKg(kgBy[g])); if(boxBy[g]) bits.push(boxBy[g]+(boxBy[g]>1?" boxes":" box"));
-    return bits.length ? bits.join(" + ")+" "+LABEL[g] : null; }).filter(Boolean).join("; ");
+    return bits.length ? bits.join(" + ")+" "+LABEL[g] : null; }).filter(Boolean)
+    .concat(cq ? [`${cq} × (box if available, else 1kg Large + 500g Medium)`] : []).join("; ");
   const totalKg = Object.values(kgBy).reduce((a,b)=>a+b,0);
   let amt = null;
-  if (hasPrices()) amt = COMBOS.reduce((s,c)=>s+(o.items?.[c.key]||0)*price(c.key),0);
-  return {parts, kgText, totalKg, amt};
+  let amtNoBox = null;
+  if (hasPrices()) { amt = COMBOS.reduce((s,c)=>s+(o.items?.[c.key]||0)*price(c.key),0);
+    amtNoBox = amt + cq*(price("Large 1kg")+price("Medium 500g")); amt += cq*price("Large 1 Box"); }
+  return {parts, kgText, totalKg, amt, amtNoBox, cq};
 }
 
+function owedCell(s){
+  if (!s.cq) return money(s.amt);
+  return `${money(s.amt)} <span class="mute">if box</span><br>${money(s.amtNoBox)} <span class="mute">if no box</span>`;
+}
 function render(){
   const priced = hasPrices();
   if (!ORDERS.length) { $("list").innerHTML = '<div class="mute">No orders yet. 暫時未有訂單。</div>'; }
   else {
     $("list").innerHTML = `<table class="list"><thead><tr><th>#</th><th>Name</th><th>Order</th><th class="n">Total</th>${priced?'<th class="n">Owed</th>':''}</tr></thead><tbody>` +
-      ORDERS.map((o,i)=>{ const s=orderSummary(o); return `<tr><td>${i+1}</td><td><b>${esc(o.name)}</b><div class="act"><button type="button" class="edit" data-i="${i}">Edit 修改</button><button type="button" class="del" data-i="${i}">Delete 刪除</button></div></td><td>${s.parts.map(esc).join("<br>")}</td><td class="n">${esc(s.kgText)}</td>${priced?`<td class="n">${money(s.amt)}</td>`:''}</tr>`; }).join("") +
+      ORDERS.map((o,i)=>{ const s=orderSummary(o); return `<tr><td>${i+1}</td><td><b>${esc(o.name)}</b><div class="act"><button type="button" class="edit" data-i="${i}">Edit 修改</button><button type="button" class="del" data-i="${i}">Delete 刪除</button></div></td><td>${s.parts.map(esc).join("<br>")}</td><td class="n">${esc(s.kgText)}</td>${priced?`<td class="n">${owedCell(s)}</td>`:''}</tr>`; }).join("") +
       `</tbody></table>`;
   }
   // totals by combination
-  const tq = {}; COMBOS.forEach(c=>tq[c.key]=ORDERS.reduce((s,o)=>s+(o.items?.[c.key]||0),0));
+  const tq = {}; ALL.forEach(c=>tq[c.key]=ORDERS.reduce((s,o)=>s+(o.items?.[c.key]||0),0));
   const kgG = {Large:0, Medium:0}, boxG = {Large:0, Medium:0}, packG = {Large:0, Medium:0};
   COMBOS.forEach(c=>{ packG[c.grade]+=tq[c.key]; if(c.kg==null) boxG[c.grade]+=tq[c.key]; else kgG[c.grade]+=tq[c.key]*c.kg; });
   const kgCell = c => c.kg==null ? '<span class="mute">n/a</span>' : fmtKg(tq[c.key]*c.kg);
   const boxTxt = n => n ? ` + ${n} box${n>1?"es":""}` : "";
   $("totals").innerHTML = `<table><thead><tr><th>Grade / pack</th><th class="n">Qty</th><th class="n">kg</th></tr></thead><tbody>` +
     COMBOS.map(c=>`<tr><td>${c.key.replace("Medium","Medium / Normal")} <span class="mute">${c.zh}</span></td><td class="n">${tq[c.key]}</td><td class="n">${kgCell(c)}</td></tr>`).join("") +
+    `<tr class="condrow"><td>${COND.short} <span class="mute">(conditional 有條件)</span></td><td class="n">${tq[COND.key]}</td><td class="n"><span class="mute">see below</span></td></tr>` +
     `<tr class="tot"><td>Large total</td><td class="n">${packG.Large}</td><td class="n">${fmtKg(kgG.Large)}${boxTxt(boxG.Large)}</td></tr>` +
     `<tr class="tot"><td>Medium / Normal total</td><td class="n">${packG.Medium}</td><td class="n">${fmtKg(kgG.Medium)}${boxTxt(boxG.Medium)}</td></tr>` +
     `<tr class="tot"><td>All 全部 (${ORDERS.length} people)</td><td class="n">${packG.Large+packG.Medium}</td><td class="n">${fmtKg(kgG.Large+kgG.Medium)}${boxTxt(boxG.Large+boxG.Medium)}</td></tr></tbody></table>` +
+    condTotals(tq, kgG, boxG) +
     `<div class="mute" style="margin-top:6px">kg excludes "1 Box" orders (box weight not fixed); boxes are counted separately. kg 不包括「1 箱」，箱數另計。</div>`;
   // cost
   let grand = 0;
-  $("cost").innerHTML = `<table><thead><tr><th>Item</th><th class="n">Price each</th>${priced?'<th class="n">Subtotal</th>':''}</tr></thead><tbody>` +
+  $("cost").innerHTML = `<table class="costt"><thead><tr><th>Item</th><th class="n">Price each</th>${priced?'<th class="n">Subtotal</th>':''}</tr></thead><tbody>` +
     COMBOS.map(c=>{ const p=price(c.key); const sub = p!=null ? p*tq[c.key] : 0; grand+=sub;
       return `<tr><td>${c.key.replace("Medium","Medium / Normal")}</td><td class="n">${p!=null?money(p):'<span class="pending">Pending, to be confirmed 待確認</span>'}</td>${priced?`<td class="n">${money(sub)}</td>`:''}</tr>`; }).join("") +
-    (priced ? `<tr class="tot"><td>Grand total 總額</td><td></td><td class="n">${money(grand)}</td></tr>` : "") + `</tbody></table>` +
+    (true ? `<tr><td>${COND.label}<div class="mute">${COND.zh}</div></td><td class="n">${priced?`${money(price("Large 1 Box"))} <span class="mute">if box</span><br>${money(price("Large 1kg")+price("Medium 500g"))} <span class="mute">if no box</span>`:'<span class="pending">Large 1 Box price, or Large 1kg + Medium 500g price if no box 待確認</span>'}</td>${priced?`<td class="n">${money(tq[COND.key]*price("Large 1 Box"))}<br>${money(tq[COND.key]*(price("Large 1kg")+price("Medium 500g")))}</td>`:''}</tr>` : "") +
+    (priced ? (tq[COND.key]
+      ? `<tr class="tot"><td>Grand total 總額 — if boxes available</td><td></td><td class="n">${money(grand+tq[COND.key]*price("Large 1 Box"))}</td></tr><tr class="tot"><td>Grand total 總額 — if no box</td><td></td><td class="n">${money(grand+tq[COND.key]*(price("Large 1kg")+price("Medium 500g")))}</td></tr>`
+      : `<tr class="tot"><td>Grand total 總額</td><td></td><td class="n">${money(grand)}</td></tr>`) : "") + `</tbody></table>` +
     (priced ? "" : '<div class="mute" style="margin-top:6px">Each person\'s amount owed will show here once prices are confirmed. 價錢確認後會顯示每人應付金額。</div>');
 }
 
+function condTotals(tq, kgG, boxG){
+  const n = tq[COND.key]; if (!n) return "";
+  const allKg = kgG.Large+kgG.Medium, allBox = boxG.Large+boxG.Medium;
+  const bx = k => `${k} box${k>1?"es":""}`;
+  return `<div class="cond"><b>Conditional 有條件:</b> ${n} × “${COND.short}” <span class="mute">(${COND.zh})</span> — not included in the totals above.
+    <table style="margin-top:6px"><tbody>
+    <tr><td><b>If boxes available 有箱</b><br><span class="mute">+${bx(n)} Large</span></td><td class="n">Large ${fmtKg(kgG.Large)} + ${bx(boxG.Large+n)}<br>Medium ${fmtKg(kgG.Medium)}${boxG.Medium?" + "+bx(boxG.Medium):""}<br><b>All ${fmtKg(allKg)} + ${bx(allBox+n)}</b></td></tr>
+    <tr><td><b>If no box 冇箱</b><br><span class="mute">+${n} × 1kg Large<br>+${n} × 500g Medium</span></td><td class="n">Large 1kg ×${tq["Large 1kg"]+n}, Medium 500g ×${tq["Medium 500g"]+n}<br>Large ${fmtKg(kgG.Large+n)}${boxG.Large?" + "+bx(boxG.Large):""}<br>Medium ${fmtKg(kgG.Medium+0.5*n)}${boxG.Medium?" + "+bx(boxG.Medium):""}<br><b>All ${fmtKg(allKg+1.5*n)}${allBox?" + "+bx(allBox):""}</b></td></tr>
+    </tbody></table></div>`;
+}
 async function loadConfig(){
   const r = await fetch("config.json?t="+Date.now(), {cache:"no-store"});
   CFG = await r.json();
@@ -184,13 +217,13 @@ function setEditing(name){
     $("btn").textContent = "Save changes 儲存修改"; }
   else { box.style.display="none"; box.innerHTML=""; $("btn").textContent = "Submit order 提交"; }
 }
-function resetForm(){ COMBOS.forEach(c=>qty[c.key]=0); renderQty(); $("name").value=""; setEditing(null); }
+function resetForm(){ ALL.forEach(c=>qty[c.key]=0); renderQty(); $("name").value=""; setEditing(null); }
 
 $("f").addEventListener("submit", async e=>{
   e.preventDefault();
   const name = $("name").value.trim().replace(/\s+/g," ");
   if (!name) return;
-  const items = {}; COMBOS.forEach(c=>{ if(qty[c.key]>0) items[c.key]=qty[c.key]; });
+  const items = {}; ALL.forEach(c=>{ if(qty[c.key]>0) items[c.key]=qty[c.key]; });
   const total = Object.values(items).reduce((a,b)=>a+b,0);
   $("btn").disabled = true; $("msg").className="msg"; $("msg").textContent="Saving… 儲存中…";
   try {
@@ -222,7 +255,7 @@ $("list").addEventListener("click", async e=>{
   const b = e.target.closest("button"); if(!b) return;
   const o = ORDERS[Number(b.dataset.i)]; if(!o) return;
   if (b.classList.contains("edit")) {
-    COMBOS.forEach(c=>qty[c.key]=o.items?.[c.key]||0); renderQty();
+    ALL.forEach(c=>qty[c.key]=o.items?.[c.key]||0); renderQty();
     $("name").value = o.name; setEditing(o.name);
     $("msg").className="msg"; $("msg").textContent="Change the quantities above, then tap Save. 修改數量後按儲存。";
     $("f").scrollIntoView({behavior:"smooth", block:"start"});
