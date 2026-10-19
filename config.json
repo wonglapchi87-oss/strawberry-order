@@ -5,7 +5,9 @@
   "prices": {
     "Large 1kg": null,
     "Large 500g": null,
+    "Large 1 Box": null,
     "Medium 1kg": null,
-    "Medium 500g": null
+    "Medium 500g": null,
+    "Medium 1 Box": null
   }
 }

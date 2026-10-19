@@ -30,6 +30,13 @@
   .tot td{font-weight:700;border-top:2px solid #ccc}
   .row-head{display:flex;justify-content:space-between;align-items:center}
   .linkbtn{background:none;border:1px solid #ccc;border-radius:8px;padding:6px 10px;font-size:.85rem}
+  .act{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .act button{padding:5px 8px;border-radius:8px;font-size:.78rem;border:1px solid #ccc;background:#fff;white-space:nowrap}
+  .act .del{color:var(--red);border-color:#f0b4bb}
+  .editing{background:#fff7d6;border:1px solid #f0d36b;border-radius:10px;padding:8px 10px;margin-top:8px;display:none}
+  table.list{font-size:.88rem}
+  table.list td.n{white-space:normal}
+  table.list td,table.list th{padding:8px 4px}
 </style>
 </head>
 <body>
@@ -42,9 +49,11 @@
     <form id="f">
       <label for="name">Your name 名字</label>
       <input id="name" type="text" maxlength="40" autocomplete="name" placeholder="e.g. Pam" required>
-      <label>Quantity 數量 (boxes 盒)</label>
+      <label>Quantity 數量 (packs 份)</label>
+      <div class="mute">"1 Box" = a whole box/tray (weight not fixed, not counted in kg). 「1 箱」= 一整箱，重量不定，不計入 kg。</div>
       <table id="qtyTable"><tbody></tbody></table>
       <div class="mute" style="margin-top:6px">Using the same name again replaces your previous order. Set everything to 0 to cancel.<br>用同一個名字再提交會更新你之前的訂單；全部設為 0 即取消。</div>
+      <div class="editing" id="editing"></div>
       <button class="submit" id="btn" type="submit">Submit order 提交</button>
       <div id="msg" class="msg"></div>
     </form>
@@ -68,11 +77,14 @@
 </main>
 <script>
 const COMBOS = [
-  {key:"Large 1kg",   grade:"Large",  kg:1,   zh:"大 1kg"},
-  {key:"Large 500g",  grade:"Large",  kg:0.5, zh:"大 500g"},
-  {key:"Medium 1kg",  grade:"Medium", kg:1,   zh:"中/普通 1kg"},
-  {key:"Medium 500g", grade:"Medium", kg:0.5, zh:"中/普通 500g"},
+  {key:"Large 1kg",    grade:"Large",  kg:1,    zh:"大 1kg"},
+  {key:"Large 500g",   grade:"Large",  kg:0.5,  zh:"大 500g"},
+  {key:"Large 1 Box",  grade:"Large",  kg:null, zh:"大 1 箱 (whole box/tray)"},
+  {key:"Medium 1kg",   grade:"Medium", kg:1,    zh:"中/普通 1kg"},
+  {key:"Medium 500g",  grade:"Medium", kg:0.5,  zh:"中/普通 500g"},
+  {key:"Medium 1 Box", grade:"Medium", kg:null, zh:"中/普通 1 箱 (whole box/tray)"},
 ];
+let EDITING = null;
 const LABEL = {"Large":"Large","Medium":"Medium / Normal"};
 let CFG = null, ORDERS = [], lastLoad = 0;
 const qty = Object.fromEntries(COMBOS.map(c=>[c.key,0]));
@@ -99,9 +111,11 @@ function money(v){ return (CFG?.currency || "$") + v.toFixed(2); }
 
 function orderSummary(o){
   const parts = COMBOS.filter(c=>o.items?.[c.key]>0).map(c=>`${c.key.replace("Medium","Medium/Normal")} × ${o.items[c.key]}`);
-  const kgBy = {};
-  COMBOS.forEach(c=>{ const q=o.items?.[c.key]||0; if(q) kgBy[c.grade]=(kgBy[c.grade]||0)+q*c.kg; });
-  const kgText = Object.entries(kgBy).map(([g,kg])=>`${fmtKg(kg)} ${LABEL[g]}`).join(" + ");
+  const kgBy = {}, boxBy = {};
+  COMBOS.forEach(c=>{ const q=o.items?.[c.key]||0; if(!q) return;
+    if (c.kg==null) boxBy[c.grade]=(boxBy[c.grade]||0)+q; else kgBy[c.grade]=(kgBy[c.grade]||0)+q*c.kg; });
+  const kgText = ["Large","Medium"].map(g=>{ const bits=[]; if(kgBy[g]) bits.push(fmtKg(kgBy[g])); if(boxBy[g]) bits.push(boxBy[g]+(boxBy[g]>1?" boxes":" box"));
+    return bits.length ? bits.join(" + ")+" "+LABEL[g] : null; }).filter(Boolean).join("; ");
   const totalKg = Object.values(kgBy).reduce((a,b)=>a+b,0);
   let amt = null;
   if (hasPrices()) amt = COMBOS.reduce((s,c)=>s+(o.items?.[c.key]||0)*price(c.key),0);
@@ -112,18 +126,22 @@ function render(){
   const priced = hasPrices();
   if (!ORDERS.length) { $("list").innerHTML = '<div class="mute">No orders yet. 暫時未有訂單。</div>'; }
   else {
-    $("list").innerHTML = `<table><thead><tr><th>#</th><th>Name</th><th>Order</th><th class="n">Total</th>${priced?'<th class="n">Owed</th>':''}</tr></thead><tbody>` +
-      ORDERS.map((o,i)=>{ const s=orderSummary(o); return `<tr><td>${i+1}</td><td><b>${esc(o.name)}</b></td><td>${s.parts.map(esc).join("<br>")}</td><td class="n">${esc(s.kgText)}</td>${priced?`<td class="n">${money(s.amt)}</td>`:''}</tr>`; }).join("") +
+    $("list").innerHTML = `<table class="list"><thead><tr><th>#</th><th>Name</th><th>Order</th><th class="n">Total</th>${priced?'<th class="n">Owed</th>':''}</tr></thead><tbody>` +
+      ORDERS.map((o,i)=>{ const s=orderSummary(o); return `<tr><td>${i+1}</td><td><b>${esc(o.name)}</b><div class="act"><button type="button" class="edit" data-i="${i}">Edit 修改</button><button type="button" class="del" data-i="${i}">Delete 刪除</button></div></td><td>${s.parts.map(esc).join("<br>")}</td><td class="n">${esc(s.kgText)}</td>${priced?`<td class="n">${money(s.amt)}</td>`:''}</tr>`; }).join("") +
       `</tbody></table>`;
   }
   // totals by combination
   const tq = {}; COMBOS.forEach(c=>tq[c.key]=ORDERS.reduce((s,o)=>s+(o.items?.[c.key]||0),0));
-  const kgG = {Large:0, Medium:0}; COMBOS.forEach(c=>kgG[c.grade]+=tq[c.key]*c.kg);
-  $("totals").innerHTML = `<table><thead><tr><th>Grade / weight</th><th class="n">Boxes</th><th class="n">kg</th></tr></thead><tbody>` +
-    COMBOS.map(c=>`<tr><td>${c.key.replace("Medium","Medium / Normal")} <span class="mute">${c.zh}</span></td><td class="n">${tq[c.key]}</td><td class="n">${fmtKg(tq[c.key]*c.kg)}</td></tr>`).join("") +
-    `<tr class="tot"><td>Large total</td><td class="n">${tq["Large 1kg"]+tq["Large 500g"]}</td><td class="n">${fmtKg(kgG.Large)}</td></tr>` +
-    `<tr class="tot"><td>Medium / Normal total</td><td class="n">${tq["Medium 1kg"]+tq["Medium 500g"]}</td><td class="n">${fmtKg(kgG.Medium)}</td></tr>` +
-    `<tr class="tot"><td>All 全部 (${ORDERS.length} people)</td><td class="n">${COMBOS.reduce((s,c)=>s+tq[c.key],0)}</td><td class="n">${fmtKg(kgG.Large+kgG.Medium)}</td></tr></tbody></table>`;
+  const kgG = {Large:0, Medium:0}, boxG = {Large:0, Medium:0}, packG = {Large:0, Medium:0};
+  COMBOS.forEach(c=>{ packG[c.grade]+=tq[c.key]; if(c.kg==null) boxG[c.grade]+=tq[c.key]; else kgG[c.grade]+=tq[c.key]*c.kg; });
+  const kgCell = c => c.kg==null ? '<span class="mute">n/a</span>' : fmtKg(tq[c.key]*c.kg);
+  const boxTxt = n => n ? ` + ${n} box${n>1?"es":""}` : "";
+  $("totals").innerHTML = `<table><thead><tr><th>Grade / pack</th><th class="n">Qty</th><th class="n">kg</th></tr></thead><tbody>` +
+    COMBOS.map(c=>`<tr><td>${c.key.replace("Medium","Medium / Normal")} <span class="mute">${c.zh}</span></td><td class="n">${tq[c.key]}</td><td class="n">${kgCell(c)}</td></tr>`).join("") +
+    `<tr class="tot"><td>Large total</td><td class="n">${packG.Large}</td><td class="n">${fmtKg(kgG.Large)}${boxTxt(boxG.Large)}</td></tr>` +
+    `<tr class="tot"><td>Medium / Normal total</td><td class="n">${packG.Medium}</td><td class="n">${fmtKg(kgG.Medium)}${boxTxt(boxG.Medium)}</td></tr>` +
+    `<tr class="tot"><td>All 全部 (${ORDERS.length} people)</td><td class="n">${packG.Large+packG.Medium}</td><td class="n">${fmtKg(kgG.Large+kgG.Medium)}${boxTxt(boxG.Large+boxG.Medium)}</td></tr></tbody></table>` +
+    `<div class="mute" style="margin-top:6px">kg excludes "1 Box" orders (box weight not fixed); boxes are counted separately. kg 不包括「1 箱」，箱數另計。</div>`;
   // cost
   let grand = 0;
   $("cost").innerHTML = `<table><thead><tr><th>Item</th><th class="n">Price each</th>${priced?'<th class="n">Subtotal</th>':''}</tr></thead><tbody>` +
@@ -153,6 +171,21 @@ async function load(){
   } catch(e){ $("list").innerHTML = '<div class="err">Could not load orders. Please tap Refresh. 載入失敗，請按 Refresh。</div>'; }
 }
 
+async function saveOrders(next){
+  const r = await fetch(CFG.dataUrl, {method:"PUT", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({name:"strawberry-group-order", data:{orders: next}})});
+  if (!r.ok) throw new Error("save failed ("+r.status+")");
+}
+function setEditing(name){
+  EDITING = name;
+  const box = $("editing");
+  if (name) { box.style.display="block"; box.innerHTML = `Editing <b>${esc(name)}</b>'s order 正在修改 · <button type="button" class="linkbtn" id="cancelEdit">Cancel edit 取消</button>`;
+    $("cancelEdit").onclick = ()=>{ resetForm(); $("msg").textContent=""; };
+    $("btn").textContent = "Save changes 儲存修改"; }
+  else { box.style.display="none"; box.innerHTML=""; $("btn").textContent = "Submit order 提交"; }
+}
+function resetForm(){ COMBOS.forEach(c=>qty[c.key]=0); renderQty(); $("name").value=""; setEditing(null); }
+
 $("f").addEventListener("submit", async e=>{
   e.preventDefault();
   const name = $("name").value.trim().replace(/\s+/g," ");
@@ -162,23 +195,49 @@ $("f").addEventListener("submit", async e=>{
   $("btn").disabled = true; $("msg").className="msg"; $("msg").textContent="Saving… 儲存中…";
   try {
     const fresh = await fetchOrders();             // re-read latest before writing
-    const idx = fresh.findIndex(o=>norm(o.name)===norm(name));
-    if (idx>=0 && !confirm(`"${fresh[idx].name}" already has an order. Replace it?\n已有「${fresh[idx].name}」的訂單，要更新嗎？`)) { $("msg").textContent=""; return; }
-    if (idx<0 && total===0) { $("msg").className="msg err"; $("msg").textContent="Please choose at least 1 box. 請至少選 1 盒。"; return; }
     let next = fresh.slice();
-    if (total===0) next.splice(idx,1);
-    else if (idx>=0) next[idx] = {...next[idx], name, items, updated: new Date().toISOString()};
-    else next.push({name, items, created: new Date().toISOString()});
-    const r = await fetch(CFG.dataUrl, {method:"PUT", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({name:"strawberry-group-order", data:{orders: next}})});
-    if (!r.ok) throw new Error("save failed ("+r.status+")");
-    $("msg").className="msg ok";
-    $("msg").textContent = total===0 ? "Order cancelled. 已取消。" : (idx>=0 ? "Order updated! 已更新！" : "Thank you, order received! 多謝，已收到！");
-    COMBOS.forEach(c=>qty[c.key]=0); renderQty();
+    const editIdx = EDITING ? next.findIndex(o=>norm(o.name)===norm(EDITING)) : -1;
+    const sameIdx = next.findIndex(o=>norm(o.name)===norm(name));
+    if (!EDITING && sameIdx>=0 && !confirm(`"${next[sameIdx].name}" already has an order. Replace it?\n已有「${next[sameIdx].name}」的訂單，要更新嗎？`)) { $("msg").textContent=""; return; }
+    if (EDITING && sameIdx>=0 && sameIdx!==editIdx && !confirm(`"${next[sameIdx].name}" already has an order. Replace it?\n已有「${next[sameIdx].name}」的訂單，要更新嗎？`)) { $("msg").textContent=""; return; }
+    const target = editIdx>=0 ? editIdx : sameIdx;
+    if (target<0 && total===0) { $("msg").className="msg err"; $("msg").textContent="Please choose at least 1. 請至少選 1 份。"; return; }
+    let msg;
+    if (total===0) { next.splice(target,1); msg="Order cancelled. 已取消。"; }
+    else if (target>=0) {
+      next[target] = {...next[target], name, items, updated: new Date().toISOString()};
+      if (sameIdx>=0 && sameIdx!==target) next.splice(sameIdx,1);   // renamed onto an existing name
+      msg="Order updated! 已更新！";
+    } else { next.push({name, items, created: new Date().toISOString()}); msg="Thank you, order received! 多謝，已收到！"; }
+    await saveOrders(next);
+    resetForm();
+    $("msg").className="msg ok"; $("msg").textContent = msg;
     await load();
   } catch(err){
     $("msg").className="msg err"; $("msg").textContent="Sorry, could not save. Please try again. 未能儲存，請再試。";
   } finally { $("btn").disabled = false; }
+});
+
+$("list").addEventListener("click", async e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  const o = ORDERS[Number(b.dataset.i)]; if(!o) return;
+  if (b.classList.contains("edit")) {
+    COMBOS.forEach(c=>qty[c.key]=o.items?.[c.key]||0); renderQty();
+    $("name").value = o.name; setEditing(o.name);
+    $("msg").className="msg"; $("msg").textContent="Change the quantities above, then tap Save. 修改數量後按儲存。";
+    $("f").scrollIntoView({behavior:"smooth", block:"start"});
+  } else if (b.classList.contains("del")) {
+    if (!confirm(`Delete ${o.name}'s order?\n確定刪除「${o.name}」的訂單？`)) return;
+    b.disabled = true;
+    try {
+      const fresh = await fetchOrders();
+      const next = fresh.filter(x=>norm(x.name)!==norm(o.name));
+      await saveOrders(next);
+      if (EDITING && norm(EDITING)===norm(o.name)) resetForm();
+      await load();
+      $("updated").textContent = `Deleted ${o.name}'s order. 已刪除。 ` + $("updated").textContent;
+    } catch(err){ alert("Could not delete, please try again. 未能刪除，請再試。"); b.disabled=false; }
+  }
 });
 $("refresh").addEventListener("click", load);
 document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && Date.now()-lastLoad>30000) load(); });
